@@ -43,3 +43,6 @@ docs/joss/paper.jats
 
 # not sure where they are from
 default.profraw
+
+# vscode
+.vscode
