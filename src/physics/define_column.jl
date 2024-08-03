@@ -70,6 +70,8 @@ Base.@kwdef mutable struct ColumnVariables{NF<:AbstractFloat} <: AbstractColumnV
     const geopot::Vector{NF} = zeros(NF, nlev)                   # gepotential height [m]
 
     # CONVECTION AND PRECIPITATION
+    const bulk_cloud_fraction::Vector{NF} = zeros(NF, nlev) # fraction of grid cell that is cloudy [0-1]
+    cloud_cover::NF = 0                     # fraction of the surface with cloud overhead [0-1]
     cloud_top::Int = nlev + 1               # layer index k of top-most layer with clouds
     precip_convection::NF = 0               # Precipitation due to convection [m]
     precip_large_scale::NF = 0              # precipitation due to large-scale condensation [m]

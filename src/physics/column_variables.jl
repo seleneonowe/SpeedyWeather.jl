@@ -135,7 +135,8 @@ function write_column_tendencies!(  D::DiagnosticVariables,
     # but NaN for no clouds
     D.surface.cloud_top[ij] = column.cloud_top == nlev+1 ? 0 : column.geopot[column.cloud_top]
     D.surface.cloud_top[ij] /= planet.gravity
-    
+
+    D.surface.cloud_cover[ij] = column.cloud_cover
     # just use layer index 1 (top) to nlev (surface) for analysis, but 0 for no clouds
     # D.surface.cloud_top[ij] = column.cloud_top == nlev+1 ? 0 : column.cloud_top
     return nothing
@@ -164,6 +165,8 @@ function reset_column!(column::ColumnVariables{NF}) where NF
     column.flux_temp_downward .= 0
 
     # Convection and precipitation
+    column.bulk_cloud_fraction .= 0
+    column.cloud_cover = 0
     column.cloud_top = column.nlev+1            # also diagnostic from condensation
     column.precip_convection = 0
     column.precip_large_scale = 0

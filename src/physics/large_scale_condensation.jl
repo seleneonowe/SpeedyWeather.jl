@@ -110,3 +110,93 @@ function large_scale_condensation!(
         end
     end
 end
+
+export CloudsWithImplicitCondensation
+"""
+Large scale condensation with a cloud scheme as with implicit precipitation.
+$(TYPEDFIELDS)"""
+@kwdef struct CloudsWithImplicitCondensation{NF<:AbstractFloat} <: AbstractCondensation
+    "Relative humidity threshold [1 = 100%] to trigger condensation"
+    relative_humidity_threshold::NF = 1
+
+    "Time scale in multiples of time step Δt, the larger the less immediate"
+    time_scale::NF = 3
+
+    "Cloud fraction and condensate parameterization"
+    ls_cloud_scheme::AbstractLargeScaleCloud = SlingoCloud{NF}()
+end
+
+CloudsWithImplicitCondensation(SG::SpectralGrid; kwargs...) = CloudsWithImplicitCondensation{SG.NF}(; kwargs...)
+
+# nothing to initialize here, but will initialize internal cloud scheme
+function initialize!(scheme::CloudsWithImplicitCondensation, model::PrimitiveEquation)
+    initialize!(scheme.ls_cloud_scheme, model)
+end
+
+# function barrier for CloudsWithImplicitCondensation to unpack model
+function large_scale_condensation!( 
+    column::ColumnVariables,
+    scheme::CloudsWithImplicitCondensation,
+    model::PrimitiveWet,
+)
+    # call the cloud scheme first
+    large_scale_cloud!(column, scheme.ls_cloud_scheme, model)
+    # then the condensation
+    large_scale_condensation!(column, scheme,
+        model.clausius_clapeyron, model.geometry, model.planet, model.atmosphere, model.time_stepping)
+end
+
+"""
+$(TYPEDSIGNATURES)
+Large-scale condensation for a `column` by relaxation back to 100%
+relative humidity. Calculates the tendencies for specific humidity
+and temperature from latent heat release and integrates the
+large-scale precipitation vertically for output."""
+function large_scale_condensation!(
+    column::ColumnVariables,
+    scheme::CloudsWithImplicitCondensation,
+    clausius_clapeyron::AbstractClausiusClapeyron,
+    geometry::Geometry,
+    planet::AbstractPlanet,
+    atmosphere::AbstractAtmosphere,
+    time_stepping::AbstractTimeStepper,
+)
+
+    (; pres, temp, humid) = column          # prognostic vars (from previous time step for numerical stability)
+    (; temp_tend, humid_tend) = column      # tendencies to write into
+    (; sat_humid) = column                  # intermediate variable, calculated in thermodynamics!
+    
+    # precompute scaling constant for precipitation output
+    pₛ = pres[end]                          # surface pressure
+    (; Δt_sec) = time_stepping
+    Δσ = geometry.σ_levels_thick
+    pₛΔt_gρ = pₛ*Δt_sec/(planet.gravity * atmosphere.water_density)
+
+    (; Lᵥ, cₚ, Lᵥ_Rᵥ) = clausius_clapeyron
+    Lᵥ_cₚ = Lᵥ/cₚ                           # latent heat of vaporization over heat capacity
+    (; time_scale, relative_humidity_threshold) = scheme
+
+    @inbounds for k in eachindex(column)
+        if humid[k] > sat_humid[k]*relative_humidity_threshold
+
+            # tendency for Implicit humid = sat_humid, divide by leapfrog time step below
+            δq = sat_humid[k] - humid[k]
+
+            # implicit correction, Frierson et al. 2006 eq. (21)
+            dqsat_dT = sat_humid[k] * Lᵥ_Rᵥ/temp[k]^2       # derivative of qsat wrt to temp
+            δq /= ((1 + Lᵥ_cₚ*dqsat_dT) * time_scale*Δt_sec) 
+
+            # latent heat release for enthalpy conservation
+            δT = -Lᵥ_cₚ * δq
+
+            # 2. Precipitation due to large-scale condensation [kg/m²/s] /ρ for [m/s]
+            # += for vertical integral
+            ΔpₖΔt_gρ = Δσ[k] * pₛΔt_gρ                      # Formula 4 *Δt for [m] of rain during Δt
+            column.precip_large_scale -= ΔpₖΔt_gρ * δq      # Formula 25, unit [m]
+
+            # only accumulate into humid_tend now to allow humid_tend != 0 before this scheme is called
+            humid_tend[k] += δq
+            temp_tend[k] += δT
+        end
+    end
+end
